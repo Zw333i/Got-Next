@@ -200,7 +200,8 @@ class ImprovedRedditService {
         'heat', 'drive', 'gone', 'gravity', 'hugo', 'super', 'wanted',
         'split', 'nerve', 'bright', 'anon', 'mute', 'life', 'joy',
         'whiplash', 'baby', 'rush', 'chef', 'limitless', 'warrior',
-        'contact', 'unforgiven', 'collateral', 'crash', 'sideways'
+        'contact', 'unforgiven', 'collateral', 'crash', 'sideways', 
+        'barbarian', 'snowfall', 'serendipity'
       ];
       
       const words = t.trim().split(/\s+/);
