@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Got Next - Your Next Cinematic Experience</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Bebas+Neue&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="gotnext.css">
+</head>
+<body>
+    <div class="popcorn-container" id="popcorn-container"></div>
+    <div class="cinema-seats"></div>
+    
+    <div class="container">
+        <header>
+            <h1>Got Next</h1>
+            <p>Discover your next cinematic masterpiece</p>
+        </header>
+        
+        <section class="search-section" id="search-section">
+            <div class="input-group">
+                <div class="input-wrapper">
+                    <input type="text" id="movie-input" placeholder="Enter a movie you love...">
+                </div>
+                <button class="search-btn" id="recommend-btn">🎬 Discover Magic</button>
+            </div>
+            
+            <div class="examples">
+                <span class="example-chip">Superbad</span>
+                <span class="example-chip">Hacksaw Ridge</span>
+                <span class="example-chip">Inception</span>
+                <span class="example-chip">Pineapple Express</span>
+                <span class="example-chip">Good Will Hunting</span>
+                <span class="example-chip">Uncut Gems</span>
+                <span class="example-chip">The Notebook</span>
+                <span class="example-chip">Monsters, Inc.</span>
+            </div>
+        </section>
+        
+        <section class="results-section">
+            <h2 class="section-title">Featured Now</h2>
+            
+            <div class="movies-grid" id="results-container">
+                <div class="loading">
+                    Curating cinematic experiences
+                    <span class="spinner"></span>
+                </div>
+            </div>
+            
+            <div id="recommendation-source"></div>
+            <div id="search-stats"></div>
+        </section>
+        
+        <footer>
+            <p>🎭 Powered by the Community • Got Next © 2025</p>
+            <div class="footer-links">
+                <a href="https://github.com" target="_blank">GitHub</a>
+                <a href="#" id="about-link">About</a>
+                <a href="#" id="contact-link">Contact</a>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Movie Details Modal -->
+    <div id="movie-modal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close">&times;</span>
+            <div class="modal-header">
+                <img id="modal-backdrop" class="modal-backdrop" src="" alt="">
+                <img id="modal-poster" class="modal-poster" src="" alt="">
+            </div>
+            <div class="modal-body">
+                <h2 class="modal-title" id="modal-title"></h2>
+                <div class="modal-meta" id="modal-meta"></div>
+                
+                <div class="modal-section">
+                    <h3>Overview</h3>
+                    <p class="modal-overview" id="modal-overview"></p>
+                </div>
+                
+                <div class="modal-section" id="streaming-section">
+                    <h3>Where to Watch</h3>
+                    <div class="streaming-platforms" id="streaming-platforms"></div>
+                </div>
+                
+                <div class="modal-section" id="reddit-section">
+                    <h3>Community Recommendation</h3>
+                    <div id="modal-reddit-data"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
