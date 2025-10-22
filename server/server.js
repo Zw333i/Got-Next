@@ -7,10 +7,12 @@ const axios = require('axios');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
+console.log('🔑 TMDB API Key present:', !!process.env.TMDB_API_KEY);
+console.log('🔑 TMDB Access Token present:', !!process.env.TMDB_ACCESS_TOKEN);
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// TMDB request helper
 const tmdbRequest = async (endpoint, params = {}) => {
   try {
     const response = await axios.get(`https://api.themoviedb.org/3${endpoint}`, {
@@ -26,13 +28,11 @@ const tmdbRequest = async (endpoint, params = {}) => {
   }
 };
 
-// Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100
 });
 
-// Middleware
 app.use(limiter);
 
 app.use(cors({
@@ -44,11 +44,9 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, '../public')));
 
-// TMDB API configuration
 const TMDB_API_KEY = process.env.TMDB_API_KEY;
 const TMDB_ACCESS_TOKEN = process.env.TMDB_ACCESS_TOKEN;
 
-// Validation middleware
 const validateQuery = (req, res, next) => {
   const { query } = req.query;
   if (!query || query.trim().length < 2) {
@@ -71,7 +69,6 @@ const validateParams = (req, res, next) => {
   next();
 };
 
-// Reddit Service init
 let redditService = null;
 if (TMDB_API_KEY && TMDB_ACCESS_TOKEN) {
   redditService = new ImprovedRedditService(TMDB_API_KEY, TMDB_ACCESS_TOKEN);
@@ -83,7 +80,6 @@ if (TMDB_API_KEY && TMDB_ACCESS_TOKEN) {
   }
 }
 
-// Health check
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'OK',
@@ -93,15 +89,12 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// AI Recommendations route
-// Replace the /api/ai-recommendations route in server.js with this:
 
 app.get('/api/ai-recommendations/:type/:id', validateParams, async (req, res) => {
   try {
     const { type, id } = req.params;
     const { comprehensive = 'false' } = req.query;
 
-    // Get movie/show details
     let title = '', overview = '', releaseYear = '';
     const details = await tmdbRequest(`/${type}/${id}`);
     title = details.title || details.name;
@@ -112,16 +105,24 @@ app.get('/api/ai-recommendations/:type/:id', validateParams, async (req, res) =>
         ? details.first_air_date.split('-')[0]
         : '';
 
-    // Try Reddit recommendations first (only for movies)
     let redditRecommendations = [];
     let searchStats = { processingTime: 0, totalFound: 0, uniqueMovies: 0, sourcesUsed: [] };
 
-    if (redditService && redditService.isAvailable() && type === 'movie') {
-      try {
+    if (redditService && redditService.isAvailable()) {
+    try {
         const startTime = Date.now();
+        console.log(`🔍 Reddit search for ${type}: "${title}"`);
+        
+        // For TV shows, add "tv show" or "series" to search
+        let searchTitle = title;
+        if (type === 'tv') {
+            searchTitle = `${title}`;
+            console.log(`📺 TV Show search query: "${searchTitle}"`);
+        }
+        
         redditRecommendations = (comprehensive === 'true')
-          ? await redditService.getRecommendations(title, 30)
-          : await redditService.getQuickRecommendations(title, 20);
+          ? await redditService.getRecommendations(searchTitle, 32, type)
+          : await redditService.getQuickRecommendations(searchTitle, 32, type);
 
         searchStats.processingTime = Date.now() - startTime;
         searchStats.totalFound = redditRecommendations.length;
@@ -135,12 +136,10 @@ app.get('/api/ai-recommendations/:type/:id', validateParams, async (req, res) =>
       }
     }
 
-    // Build response based on what we have
     let allRecommendations = [];
     let tmdbRecommendations = [];
 
     if (redditRecommendations.length > 0) {
-      // We have Reddit recommendations - use ONLY those
       console.log('✅ Using Reddit recommendations only');
       allRecommendations = redditRecommendations.map(rec => ({
         ...rec,
@@ -155,7 +154,6 @@ app.get('/api/ai-recommendations/:type/:id', validateParams, async (req, res) =>
         }
       }));
     } else {
-      // No Reddit recommendations - fall back to TMDB
       console.log('⚠️ No Reddit recommendations, falling back to TMDB');
       try {
         const tmdbData = await tmdbRequest(`/${type}/${id}/recommendations`);
@@ -248,11 +246,22 @@ app.get('/api/test-reddit/:movieTitle', async (req, res) => {
 app.get('/api/search', validateQuery, async (req, res) => {
   try {
     const { query, type = 'multi', page = 1 } = req.query;
-    const data = await tmdbRequest(`/search/${type}`, { query: query.trim(), page: Math.min(page, 1000) });
+    console.log(`🔍 Search request: query="${query}", type="${type}"`);
+    
+    const data = await tmdbRequest(`/search/${type}`, { 
+      query: query.trim(), 
+      page: Math.min(page, 1000) 
+    });
+    
+    console.log(`✅ Search results: ${data.results?.length || 0} items found`);
     res.json({ ...data, results: data.results.filter(item => item.poster_path) });
   } catch (error) {
-    console.error('Search error:', error.message);
-    res.status(500).json({ error: 'Search failed', code: 'INTERNAL_ERROR' });
+    console.error('❌ Search error:', error.message);
+    console.error('Stack:', error.stack);
+    res.status(500).json({ 
+      error: 'Search failed: ' + error.message, 
+      code: 'INTERNAL_ERROR' 
+    });
   }
 });
 

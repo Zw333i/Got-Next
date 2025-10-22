@@ -1,6 +1,7 @@
 // server/redditServiceV2.js - Optimized for maximum movie extraction
 const snoowrap = require('snoowrap');
 const axios = require('axios');
+const AIParser = require('./aiParser');
 
 class ImprovedRedditService {
   constructor(tmdbApiKey, tmdbAccessToken) {
@@ -38,6 +39,7 @@ class ImprovedRedditService {
 
     this.cache = new Map();
     this.cacheExpiry = 24 * 60 * 60 * 1000;
+    this.aiParser = new AIParser();
   }
 
   isAvailable() {
@@ -55,10 +57,13 @@ class ImprovedRedditService {
     this.cache.set(key, { data, timestamp: Date.now() });
     return data;
   }
+  
 
-  async searchAndValidateTMDB(title, year = null) {
+  
+
+  async searchAndValidateTMDB(title, year = null, contentType = 'movie') {
     if (!title) return [];
-    const cacheKey = year ? `tmdb_${title.toLowerCase()}_${year}` : `tmdb_${title.toLowerCase()}`;
+    const cacheKey = year ? `tmdb_${contentType}_${title.toLowerCase()}_${year}` : `tmdb_${contentType}_${title.toLowerCase()}`;
 
     return this.getCached(cacheKey, async () => {
       try {
@@ -68,22 +73,24 @@ class ImprovedRedditService {
           include_adult: false 
         };
         
-        // Add year filter if provided
         if (year) {
           params.year = year;
           params.primary_release_year = year;
         }
         
-        const response = await axios.get(`${this.tmdbBaseUrl}/search/movie`, {
+        const endpoint = contentType === 'tv' ? '/search/tv' : '/search/movie';
+        const response = await axios.get(`${this.tmdbBaseUrl}${endpoint}`, {
           headers: { Authorization: `Bearer ${this.tmdbAccessToken}` },
           params: params,
           timeout: 10000,
         });
 
         let results = (response.data.results || [])
-          .filter((m) => m && m.title && m.poster_path && m.vote_average > 0);
+          .filter((m) => {
+          const hasTitle = contentType === 'tv' ? m.name : m.title;
+          return m && hasTitle && m.poster_path && m.vote_average > 0;
+        });
         
-        // If year provided, prioritize exact year matches
         if (year && results.length > 0) {
           const exactYearMatch = results.find(m => {
             const releaseYear = m.release_date ? m.release_date.split('-')[0] : null;
@@ -91,7 +98,6 @@ class ImprovedRedditService {
           });
           
           if (exactYearMatch) {
-            // Put exact match first
             return [exactYearMatch, ...results.filter(m => m.id !== exactYearMatch.id)].slice(0, 3);
           }
         }
@@ -104,51 +110,88 @@ class ImprovedRedditService {
     });
   }
 
-  async extractRecommendationsFromPost(text, originalTitle) {
-    if (!text || typeof text !== 'string') return [];
+  async extractRecommendationsFromPost(text, originalTitle, contentType = 'movie') {
+  if (!text || typeof text !== 'string') return [];
+
+  if (this.aiParser && this.aiParser.isAvailable()) {
+    const aiTitles = await this.aiParser.extractTitles(text, originalTitle, contentType);
     
-    const potentialTitles = new Set();
+    if (aiTitles && aiTitles.length > 0) {
+      console.log(`  🤖 Using AI-extracted titles (${aiTitles.length} found)`);
+      
+      const validated = [];
+      for (const titleStr of aiTitles) {
+        const yearMatch = /\((\d{4})\)/.exec(titleStr);
+        const title = titleStr.replace(/\s*\(\d{4}\)\s*/, '').trim();
+        const year = yearMatch ? yearMatch[1] : null;
+        
+        try {
+          const tmdbResults = await this.searchAndValidateTMDB(title, year, contentType);
+          if (tmdbResults.length > 0) {
+            const matchedMovie = tmdbResults[0];
+            const movieYear = matchedMovie.release_date 
+              ? matchedMovie.release_date.split('-')[0] 
+              : matchedMovie.first_air_date 
+                ? matchedMovie.first_air_date.split('-')[0] 
+                : 'Unknown';
+            console.log(`  ✅ "${title}"${year ? ` (${year})` : ''} → "${matchedMovie.title || matchedMovie.name}" (${movieYear})`);
+            validated.push({
+              extractedTitle: title,
+              tmdbMatch: matchedMovie,
+              confidence: this.calculateMatchConfidence(title, matchedMovie.title || matchedMovie.name),
+            });
+          }
+        } catch (error) {
+          console.log(`  ⚠️ Error for "${title}": ${error.message}`);
+        }
+        
+        await this.sleep(100);
+      }
+      
+      if (validated.length > 0) {
+        console.log(`  ✅ ${validated.length} AI recommendations validated`);
+        return validated;
+      }
+    }
+  }
+
+  console.log('  📝 Using regex extraction (AI unavailable or failed)');
+  const potentialTitles = new Set();
     const lines = text.split('\n');
     
-    // Pattern 1: Plain lines (most common format)
-    const titlesWithYears = new Map(); // Track which titles have years
+    const titlesWithYears = new Map(); 
     
     lines.forEach(line => {
         const trimmed = line.trim();
         
-        // Match with year
         const lineWithYear = /^([A-Z][A-Za-z0-9\s&:'.!?-]{2,49})\s*\((\d{4})\)$/.exec(trimmed);
         if (lineWithYear) {
             const title = lineWithYear[1].trim();
             const year = lineWithYear[2];
             potentialTitles.add(title);
-            titlesWithYears.set(title, year); // Store the year for validation
+            titlesWithYears.set(title, year); 
         } else if (/^[A-Z][A-Za-z0-9\s&:'.!?-]{2,49}$/.test(trimmed)) {
-            // Plain title without year
+ 
             potentialTitles.add(trimmed);
         }
     });
     
-    // Pattern 2: Bullet points - Match both formats
     const bulletPattern = /^[\s]*[-*•]\s*([A-Z][A-Za-z0-9\s&:'.!?-]{2,49})/gm;
     let match;
     while ((match = bulletPattern.exec(text)) !== null) {
         potentialTitles.add(match[1].trim());
     }
     
-    // Pattern 3: Numbered lists
     const numberedPattern = /^\d+[\.\)]\s*([A-Z][A-Za-z0-9\s&:'.!?-]{2,49})/gm;
     while ((match = numberedPattern.exec(text)) !== null) {
         potentialTitles.add(match[1].trim());
     }
     
-    // Pattern 4: Bold text
     const boldPattern = /\*\*([A-Z][A-Za-z0-9\s&:'.!?-]{2,50})\*\*/g;
     while ((match = boldPattern.exec(text)) !== null) {
         potentialTitles.add(match[1].trim());
     }
     
-    // Pattern 5: With year - extract and store year mapping
     const yearPattern = /([A-Z][A-Za-z0-9\s&:'.!?-]{2,50})\s*\((\d{4})\)/g;
     while ((match = yearPattern.exec(text)) !== null) {
         const title = match[1].trim();
@@ -157,13 +200,11 @@ class ImprovedRedditService {
         titlesWithYears.set(title, year);
     }
     
-    // Pattern 6: Quoted
     const quotedPattern = /"([A-Z][A-Za-z0-9\s&:'.!?-]{2,50})"/g;
     while ((match = quotedPattern.exec(text)) !== null) {
         potentialTitles.add(match[1].trim());
     }
     
-    // Pattern 7: After action words
     const actionPattern = /(?:watch|try|recommend|check out|see|loved)\s+([A-Z][A-Za-z0-9\s&:'.!?-]{3,40})/gi;
     while ((match = actionPattern.exec(text)) !== null) {
         potentialTitles.add(match[1].trim());
@@ -171,19 +212,15 @@ class ImprovedRedditService {
 
     console.log(`  📝 Extracted ${potentialTitles.size} potential titles`);
 
-    // More lenient filtering
     const filtered = Array.from(potentialTitles).filter((t) => {
       const lower = t.toLowerCase();
       const orig = originalTitle.toLowerCase();
       
-      // Don't filter out the original movie
       if (lower === orig || lower.includes(orig) || orig.includes(lower)) return false;
       
-      // Clean up parenthetical text
       const cleaned = t.replace(/\s*\([^)]*\)\s*/g, '').trim();
       if (cleaned.length < 2) return false;
       
-      // Skip obvious non-movies
       const skipPhrases = [
         'reddit', 'edit', 'thanks', 'update', 'thread', 'subreddit',
         'the movie', 'the film', 'this movie', 'that movie',
@@ -192,7 +229,6 @@ class ImprovedRedditService {
       
       if (skipPhrases.some(phrase => lower === phrase)) return false;
       
-      // Expanded single-word movie whitelist
       const singleWordTitles = [
         'up', 'her', 'it', 'arrival', 'dunkirk', 'frozen', 'tangled', 
         'brave', 'coco', 'soul', 'cars', 'willow', 'elf', 'jaws', 
@@ -209,19 +245,18 @@ class ImprovedRedditService {
         return false;
       }
       
-      // Must contain actual letters
       return /[A-Za-z]{2,}/.test(t);
     });
 
     console.log(`  🔍 ${filtered.length} titles after filtering`);
 
-    // Validate with TMDB in parallel batches, using years when available
-    // Process ALL filtered titles, not just first 30
     const validated = [];
     const batchSize = 5;
     
-    for (let i = 0; i < filtered.length; i += batchSize) {
-        const batch = filtered.slice(i, i + batchSize);
+    const titlesToProcess = filtered.slice(0, 20);
+
+    for (let i = 0; i < titlesToProcess.length; i += batchSize) {
+        const batch = titlesToProcess.slice(i, i + batchSize);
         
         const results = await Promise.all(
             batch.map(async title => {
@@ -280,95 +315,241 @@ class ImprovedRedditService {
     return common / (Math.max(eWords.size, tWords.size) || 1);
   }
 
-  async getQuickRecommendations(movieTitle, limit = 20) {
+  calculatePostRelevance(postTitle, searchMovieTitle) {
+  const titleLower = postTitle.toLowerCase();
+  const queryLower = searchMovieTitle.toLowerCase();
+  
+  let score = 0;
+  
+  // Exact title match in quotes
+  if (titleLower.includes(`"${queryLower}"`)) score += 100;
+  
+  // Title appears in post
+  if (titleLower.includes(queryLower)) score += 50;
+  
+  // Has recommendation keywords
+  const goodKeywords = ['like', 'similar', 'recommend', 'suggestions', 'if you liked'];
+  goodKeywords.forEach(keyword => {
+    if (titleLower.includes(keyword)) score += 10;
+  });
+  
+  // Penalize bad keywords
+  const badKeywords = ['unlike', 'opposite', 'different from', 'not as good'];
+  badKeywords.forEach(keyword => {
+    if (titleLower.includes(keyword)) score -= 50;
+  });
+  
+  return score;
+}
+
+async getQuickRecommendations(movieTitle, limit = 32, contentType = 'movie') {
     if (!this.isAvailable()) return [];
 
     try {
-        console.log(`🔍 Searching for movies like: ${movieTitle}`);
+        console.log(`🔍 Searching for ${contentType === 'tv' ? 'TV shows' : 'movies'} like: ${movieTitle}`);
         const recommendations = new Map();
         
-        const query = `movies like ${movieTitle}`;
+        // Get original movie's genres for filtering (optional but helps)
+        let originalGenres = null;
+        try {
+            const searchResults = await this.searchAndValidateTMDB(movieTitle, null, contentType);
+            if (searchResults.length > 0) {
+                originalGenres = await this.getMovieGenres(searchResults[0].id, contentType);
+                console.log(`📋 Original genres: ${originalGenres.map(g => g.name).join(', ')}`);
+            }
+        } catch (e) {
+            console.log('⚠️ Could not fetch original genres, skipping genre filter');
+        }
         
-        const results = await this.reddit
-            .getSubreddit('MovieSuggestions')
-            .search({
-                query: query,
-                sort: 'relevance',
-                time: 'all',
-                limit: 15  // Increased from 10
-            });
+        let query;
+        if (contentType === 'tv') {
+            query = `"${movieTitle}" tv show recommendations similar`;
+        } else {
+            query = `"${movieTitle}" movie recommendations similar`;
+        }
+        console.log(`🔍 Search query: "${query}"`);
+        
+        const subreddit = contentType === 'tv' ? 'televisionsuggestions' : 'MovieSuggestions';
+        console.log(`📺 Searching r/${subreddit} for ${contentType}`);
+        
+        let results;
+        try {
+            results = await this.reddit
+                .getSubreddit(subreddit)
+                .search({
+                    query: query,
+                    sort: 'relevance',
+                    time: 'all',
+                    limit: 20
+                });
+        } catch (searchError) {
+            console.error(`❌ Failed to search r/${subreddit}:`, searchError.message);
+            // Try alternative subreddit
+            if (contentType === 'tv') {
+                console.log(`🔄 Trying alternative: r/television`);
+                try {
+                    results = await this.reddit
+                        .getSubreddit('television')
+                        .search({
+                            query: query,
+                            sort: 'relevance',
+                            time: 'all',
+                            limit: 20
+                        });
+                } catch (altError) {
+                    console.error(`❌ Alternative search also failed:`, altError.message);
+                    return [];
+                }
+            } else {
+                return [];
+            }
+        }
         
         const resultsArray = Array.isArray(results) ? results : Array.from(results || []);
         console.log(`📊 Found ${resultsArray.length} posts`);
         
-        for (const post of resultsArray) {
-            const titleText = post?.title || '';
-            
-            if (!titleText.toLowerCase().includes(movieTitle.toLowerCase())) {
-                continue;
+        const batchSize = 3;
+        let shouldStop = false;
+        
+        for (let i = 0; i < Math.min(resultsArray.length, 8); i += batchSize) {
+            if (shouldStop || recommendations.size >= limit) {
+                console.log(`✅ Reached ${recommendations.size} recommendations - stopping search`);
+                break;
             }
             
-            console.log(`\n✅ "${titleText}"`);
-            console.log(`   Comments: ${post.num_comments}`);
+            const batch = resultsArray.slice(i, i + batchSize);
             
-            if (post.num_comments > 0) {
-                try {
-                    const submission = await this.reddit.getSubmission(post.id).fetch();
-                    let comments = submission.comments || [];
-                    
-                    if (!Array.isArray(comments)) {
-                        if (comments && typeof comments[Symbol.iterator] === 'function') {
-                            comments = Array.from(comments);
-                        } else {
-                            continue;
-                        }
-                    }
-                    
-                    console.log(`   Processing ${Math.min(comments.length, 50)} comments...`);
-                    
-                    let foundMoviesCount = 0;
-                    
-                    // Process MORE comments
-                    for (let i = 0; i < Math.min(comments.length, 50); i++) {
-                        const comment = comments[i];
-                        
-                        if (!comment || !comment.body || typeof comment.body !== 'string') {
-                            continue;
-                        }
-                        
-                        if (comment.body.length < 5) continue;
-                        
-                        const commentMovies = await this.extractRecommendationsFromPost(
-                            comment.body,
-                            movieTitle
-                        );
-                        
-                        if (commentMovies.length > 0) {
-                            foundMoviesCount += commentMovies.length;
-                            console.log(`   ✅ Found ${commentMovies.length} movies: ${commentMovies.map(m => m.tmdbMatch.title).join(', ')}`);
-                        }
-                        
-                        commentMovies.forEach((movie) => {
-                            if (!movie?.tmdbMatch) return;
-                            this.addOrUpdateRecommendation(recommendations, movie, {
-                                source: 'comment',
-                                subreddit: 'MovieSuggestions',
-                                score: comment.score || 1,
-                                url: post?.permalink ? `https://reddit.com${post.permalink}` : '#',
-                            });
-                        });
-                    }
-                    
-                    console.log(`   Total movies found in this post: ${foundMoviesCount}`);
-                    
-                } catch (commentError) {
-                    console.log('   ⚠️ Could not fetch comments:', commentError.message);
+            // Sort batch by relevance
+            const scoredBatch = batch.map(post => ({
+                post,
+                relevance: this.calculatePostRelevance(post?.title || '', movieTitle)
+            })).filter(item => item.relevance > 0)
+                .sort((a, b) => b.relevance - a.relevance);
+
+            await Promise.all(scoredBatch.map(async ({ post, relevance }) => {
+                if (recommendations.size >= limit) {
+                    return;
                 }
+                
+                const titleText = post?.title || '';
+                console.log(`\n✅ "${titleText}" (relevance: ${relevance})`);
+                const titleLower = titleText.toLowerCase();
+                const queryLower = movieTitle.toLowerCase();
+
+                // More strict title matching
+                if (!titleLower.includes(queryLower)) {
+                    console.log(`  ⏭️ Skipping post: "${titleText}" (doesn't match query)`);
+                    return;
+                }
+
+                // Skip posts that are clearly about different movies
+                const skipKeywords = ['unlike', 'not like', 'opposite of', 'different from'];
+                if (skipKeywords.some(keyword => titleLower.includes(keyword))) {
+                    console.log(`  ⏭️ Skipping negative comparison post`);
+                    return;
+                }
+                
+                console.log(`\n✅ "${titleText}"`);
+                
+                if (post.num_comments > 0) {
+                    try {
+                        const submission = await this.reddit.getSubmission(post.id).fetch();
+                        let comments = submission.comments || [];
+                        
+                        if (!Array.isArray(comments)) {
+                            if (comments && typeof comments[Symbol.iterator] === 'function') {
+                                comments = Array.from(comments);
+                            } else {
+                                return;
+                            }
+                        }
+                        
+                        const topComments = comments
+                            .filter(c => c && c.body && c.body.length >= 5)
+                            .sort((a, b) => (b.score || 0) - (a.score || 0))
+                            .slice(0, 15);
+                        
+                        console.log(`   Processing ${topComments.length} top comments...`);
+                        
+                        const commentBatchSize = 5;
+                        for (let j = 0; j < topComments.length; j += commentBatchSize) {
+                            if (recommendations.size >= limit) {
+                                console.log(`   ⏸️ Stopping comment processing - found enough results (${recommendations.size}/${limit})`);
+                                shouldStop = true;
+                                break;
+                            }
+                            
+                            const commentBatch = topComments.slice(j, j + commentBatchSize);
+                            
+                            const batchResults = await Promise.all(
+                                commentBatch.map(async (comment) => {
+                                    return await this.extractRecommendationsFromPost(
+                                        comment.body,
+                                        movieTitle,
+                                        contentType
+                                    );
+                                })
+                            );
+                            
+                            for (let idx = 0; idx < batchResults.length; idx++) {
+                                if (shouldStop) break; // Check at start of loop
+                                
+                                const commentMovies = batchResults[idx];
+                                const comment = commentBatch[idx];
+                                
+                                for (const movie of commentMovies) {
+                                    if (recommendations.size >= limit) {
+                                        console.log(`   🛑 Hard stop - reached ${limit} recommendations`);
+                                        shouldStop = true;
+                                        break;
+                                    }
+                                    
+                                    if (!movie?.tmdbMatch) continue;
+                                    
+                                    // Genre filtering
+                                    if (originalGenres && originalGenres.length > 0) {
+                                        try {
+                                            const movieGenres = await this.getMovieGenres(movie.tmdbMatch.id, contentType);
+                                            if (!this.isGenreSimilar(originalGenres, movieGenres)) {
+                                                console.log(`  ⏭️ Skipping "${movie.tmdbMatch.title || movie.tmdbMatch.name}" - genre mismatch`);
+                                                continue;
+                                            }
+                                        } catch (e) {
+                                            console.log(`  ⚠️ Genre check failed for "${movie.tmdbMatch.title}"`);
+                                        }
+                                    }
+                                    
+                                    this.addOrUpdateRecommendation(recommendations, movie, {
+                                        source: 'comment',
+                                        subreddit: subreddit,
+                                        score: comment.score || 1,
+                                        url: post?.permalink ? `https://reddit.com${post.permalink}` : '#',
+                                    });
+                                }
+                                
+                                if (shouldStop) break; // Break out of batchResults loop
+                            }
+                            
+                            if (shouldStop) break; // Break out of topComments for loop
+                        }
+                    } catch (commentError) {
+                        console.log('   ⚠️ Could not fetch comments:', commentError.message);
+                    }
+                }
+            }));
+
+            // Check after Promise.all completes
+            if (shouldStop || recommendations.size >= limit) {
+                console.log(`   ⏸️ Stopping - found ${recommendations.size} recommendations`);
+                break;
             }
             
-            if (recommendations.size >= limit * 2) break; // Get more than needed
+            if (recommendations.size >= limit) {
+                console.log(`✅ Found ${recommendations.size} recommendations - stopping early`);
+                break;
+            }
             
-            await this.sleep(1500); // Slightly faster
+            await this.sleep(800);
         }
 
         const finalResults = Array.from(recommendations.values())
@@ -382,19 +563,22 @@ class ImprovedRedditService {
         console.error('❌ Search error:', err.message);
         return [];
     }
-  }
+}
 
-  async getRecommendations(movieTitle, limit = 30) {
+  async getRecommendations(movieTitle, limit = 32, contentType = 'movie') {
     if (!this.isAvailable()) return [];
 
     const cacheKey = `reddit_recs_${movieTitle.toLowerCase()}`;
     return this.getCached(cacheKey, async () => {
         const recommendations = new Map();
-        // More subreddits
-        const subreddits = ['MovieSuggestions', 'ifyoulikeblank', 'movies', 'TrueFilm'];
+
+        const subreddits = contentType === 'tv' 
+        ? ['televisionsuggestions', 'ifyoulikeblank', 'tv_shows']
+        : ['MovieSuggestions', 'ifyoulikeblank', 'movies'];
         
         for (const subreddit of subreddits) {
-            const query = `movies like ${movieTitle}`;
+            const searchTerm = contentType === 'tv' ? 'tv shows' : 'movies';
+            const query = `${searchTerm} like ${movieTitle}`;
             
             try {
                 console.log(`🔍 Searching r/${subreddit}`);
@@ -407,12 +591,14 @@ class ImprovedRedditService {
 
                 const resultsArray = Array.isArray(results) ? results : Array.from(results || []);
 
-                for (const post of resultsArray) {
-                    const titleText = post?.title || '';
-                    
-                    if (!titleText.toLowerCase().includes(movieTitle.toLowerCase())) {
-                        continue;
-                    }
+            for (const post of resultsArray) {
+                // Stop if we have enough recommendations
+                if (recommendations.size >= limit) {
+                    console.log(`✅ Reached ${recommendations.size} recommendations in r/${subreddit} - moving to next subreddit`);
+                    break;
+                }
+                
+                const titleText = post?.title || '';
                     
                     if (post.num_comments > 0) {
                         try {
@@ -423,12 +609,11 @@ class ImprovedRedditService {
                                 comments = Array.from(comments);
                             }
                             
-                            // Process MORE comments
                             for (let i = 0; i < Math.min(comments.length, 40); i++) {
                                 const comment = comments[i];
                                 if (!comment?.body || comment.body.length < 5) continue;
                                 
-                                const movies = await this.extractRecommendationsFromPost(comment.body, movieTitle);
+                                const movies = await this.extractRecommendationsFromPost(comment.body, movieTitle, contentType);
                                 
                                 movies.forEach((movie) =>
                                     this.addOrUpdateRecommendation(recommendations, movie, {
@@ -451,14 +636,41 @@ class ImprovedRedditService {
             }
         }
 
-        const finalResults = Array.from(recommendations.values())
-            .sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0))
-            .slice(0, limit);
-            
-        console.log(`✅ Total: ${finalResults.length} recommendations`);
-        return finalResults;
+          const finalResults = Array.from(recommendations.values())
+              .sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0))
+              .slice(0, limit);
+
+          const stoppedEarly = recommendations.size >= limit;
+          console.log(`\n✅ Final: ${finalResults.length} unique recommendations${stoppedEarly ? ' (stopped early - found enough results)' : ''}`);
+          return finalResults;
     });
   }
+
+  async getMovieGenres(movieId, contentType = 'movie') {
+  try {
+    const endpoint = contentType === 'tv' ? `/tv/${movieId}` : `/movie/${movieId}`;
+    const response = await axios.get(`${this.tmdbBaseUrl}${endpoint}`, {
+      headers: { Authorization: `Bearer ${this.tmdbAccessToken}` },
+      params: { api_key: this.tmdbApiKey },
+      timeout: 5000,
+    });
+    return response.data.genres || [];
+  } catch (error) {
+    return [];
+  }
+}
+
+isGenreSimilar(genres1, genres2) {
+  if (!genres1 || !genres2 || genres1.length === 0 || genres2.length === 0) {
+    return true; // If we can't determine, allow it
+  }
+  
+  const ids1 = genres1.map(g => g.id);
+  const ids2 = genres2.map(g => g.id);
+  
+  // Check if at least 1 genre matches
+  return ids1.some(id => ids2.includes(id));
+}
 
   addOrUpdateRecommendation(map, movie, context) {
     if (!movie?.tmdbMatch?.id) return;

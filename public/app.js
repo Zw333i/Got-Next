@@ -30,7 +30,6 @@ function createPopcorn() {
 
 setInterval(createPopcorn, 2000);
 
-// Event listeners
 recommendBtn.addEventListener('click', getEnhancedRecommendations);
 movieInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') getEnhancedRecommendations();
@@ -48,6 +47,16 @@ window.addEventListener('click', (e) => {
     if (e.target === modal) closeModal();
 });
 
+function updateLoadingProgress(message) {
+    const loadingDiv = resultsContainer.querySelector('.loading');
+    if (loadingDiv) {
+        loadingDiv.innerHTML = `
+            🎬 ${message}
+            <span class="spinner"></span>
+        `;
+    }
+}
+
 async function getEnhancedRecommendations() {
     const query = movieInput.value.trim();
     if (!query) {
@@ -60,8 +69,19 @@ async function getEnhancedRecommendations() {
     hideGlowLine();
     
     try {
-        console.log(`🎬 Searching for: ${query}`);
-        const searchResponse = await fetch(`${API_BASE_URL}/search?query=${encodeURIComponent(query)}`);
+        let searchQuery = query;
+        let yearFilter = null;
+        const yearMatch = query.match(/^(.+?)\s*\((\d{4})\)\s*$/);
+        
+        if (yearMatch) {
+            searchQuery = yearMatch[1].trim();
+            yearFilter = yearMatch[2];
+            console.log(`🎬 Searching for: ${searchQuery} (Year: ${yearFilter})`);
+        } else {
+            console.log(`🎬 Searching for: ${query}`);
+        }
+        
+        const searchResponse = await fetch(`${API_BASE_URL}/search?query=${encodeURIComponent(searchQuery)}`);
         
         if (!searchResponse.ok) throw new Error(`Search failed: ${searchResponse.status}`);
         
@@ -72,17 +92,43 @@ async function getEnhancedRecommendations() {
             showGlowLine();
             return;
         }
-        
-        const firstResult = searchData.results[0];
+                
+        let firstResult = searchData.results[0];
+
+        if (yearFilter && searchData.results.length > 1) {
+            const yearMatch = searchData.results.find(result => {
+                const releaseDate = result.release_date || result.first_air_date;
+                if (releaseDate) {
+                    const resultYear = releaseDate.split('-')[0];
+                    return resultYear === yearFilter;
+                }
+                return false;
+            });
+            
+            if (yearMatch) {
+                console.log(`✅ Found exact year match: ${yearMatch.title || yearMatch.name} (${yearFilter})`);
+                firstResult = yearMatch;
+            } else {
+                console.log(`⚠️ No exact ${yearFilter} match found, using best result`);
+            }
+        }
         const movieType = firstResult.media_type === 'tv' || firstResult.name ? 'tv' : 'movie';
         const movieId = firstResult.id;
         const movieTitle = firstResult.title || firstResult.name;
+        const displayTitle = movieTitle;
+        const contentType = movieType === 'tv' ? 'TV Show' : 'Movie';
         
         console.log(`🎭 Found: ${movieTitle} (${movieType}, ID: ${movieId})`);
+        updateLoadingProgress(`Searching Reddit communities for recommendations...`);
         
-        document.querySelector('.section-title').textContent = `What you Got Next after "${movieTitle}"`;
+        document.querySelector('.section-title').textContent = `What you Got Next after "${movieTitle}" (${contentType})`;
         
-        // Get Reddit + TMDB recommendations
+        updateLoadingProgress(`Analyzing community recommendations...`);
+
+        const checkInterval = setInterval(() => {
+            updateLoadingProgress(`Found recommendations, validating results...`);
+        }, 15000); 
+
         const recommendResponse = await fetch(
             `${API_BASE_URL}/ai-recommendations/${movieType}/${movieId}?comprehensive=true`
         );
@@ -91,13 +137,13 @@ async function getEnhancedRecommendations() {
         
         const recommendData = await recommendResponse.json();
         console.log('🍿 Recommendation data received:', recommendData);
+
+        clearInterval(checkInterval); 
         
-        // PRIORITY: Use Reddit if available, otherwise TMDB
         if (recommendData.recommendations && recommendData.recommendations.length > 0) {
             const redditRecs = recommendData.recommendations.filter(r => r.source_type === 'reddit');
             const tmdbRecs = recommendData.recommendations.filter(r => r.source_type === 'tmdb');
             
-            // Show ONLY Reddit if we have them, otherwise show TMDB
             const displayRecs = redditRecs.length > 0 ? redditRecs : tmdbRecs;
             
             displayEnhancedMovies(displayRecs);
@@ -138,6 +184,8 @@ function displayEnhancedMovies(movies) {
             : 'https://via.placeholder.com/500x750/1c1c1c/888888?text=No+Poster';
         
         const title = movie.title || movie.name;
+        const contentType = movie.title ? 'movie' : 'tv';
+        const contentBadge = contentType === 'tv' ? '<span class="content-type-badge tv">TV</span>' : '';
         const releaseDate = movie.release_date || movie.first_air_date;
         const year = releaseDate ? releaseDate.split('-')[0] : 'TBA';
         const rating = movie.vote_average ? movie.vote_average.toFixed(1) : 'N/A';
@@ -165,7 +213,7 @@ function displayEnhancedMovies(movies) {
                 ${redditIndicator}
             </div>
             <div class="movie-info">
-                <h3 class="movie-title">${title}</h3>
+                <h3 class="movie-title">${title}${contentBadge}</h3>
                 <div class="movie-details">
                     <span class="rating">${rating}</span>
                     <span class="year">${year}</span>

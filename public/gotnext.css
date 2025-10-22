@@ -400,6 +400,29 @@ input::placeholder {
     color: var(--text-primary);
 }
 
+.content-type-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    background: linear-gradient(135deg, var(--accent-red), var(--accent-red-dark));
+    color: white;
+    font-size: 0.7rem;
+    font-weight: 700;
+    border-radius: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+.content-type-badge.movie {
+    background: linear-gradient(135deg, var(--accent-gold), var(--accent-gold-dark));
+    color: var(--primary-bg);
+}
+
+.content-type-badge.tv {
+    background: linear-gradient(135deg, #4a90e2, #2e5c8a);
+}
+
 .movie-details {
     display: flex;
     justify-content: space-between;
