@@ -69,16 +69,16 @@ async function getEnhancedRecommendations() {
     hideGlowLine();
     
     try {
-        let searchQuery = query;
+        let searchQuery = query.trim();
         let yearFilter = null;
         const yearMatch = query.match(/^(.+?)\s*\((\d{4})\)\s*$/);
-        
+
         if (yearMatch) {
             searchQuery = yearMatch[1].trim();
             yearFilter = yearMatch[2];
-            console.log(`🎬 Searching for: ${searchQuery} (Year: ${yearFilter})`);
+            console.log(`🎬 User input: "${searchQuery}" (Year: ${yearFilter})`);
         } else {
-            console.log(`🎬 Searching for: ${query}`);
+            console.log(`🎬 User input: "${query}"`);
         }
         
         const searchResponse = await fetch(`${API_BASE_URL}/search?query=${encodeURIComponent(searchQuery)}`);
@@ -112,16 +112,24 @@ async function getEnhancedRecommendations() {
                 console.log(`⚠️ No exact ${yearFilter} match found, using best result`);
             }
         }
+        
         const movieType = firstResult.media_type === 'tv' || firstResult.name ? 'tv' : 'movie';
         const movieId = firstResult.id;
         const movieTitle = firstResult.title || firstResult.name;
+        
+        const movieReleaseDate = firstResult.release_date || firstResult.first_air_date;
+        const movieYear = movieReleaseDate ? movieReleaseDate.split('-')[0] : null;
+        
+        const searchTitleForReddit = movieYear ? `${movieTitle} (${movieYear})` : movieTitle;
+        
         const displayTitle = movieTitle;
         const contentType = movieType === 'tv' ? 'TV Show' : 'Movie';
         
-        console.log(`🎭 Found: ${movieTitle} (${movieType}, ID: ${movieId})`);
+        console.log(`🎭 Found: ${movieTitle} (${movieYear}) [${movieType}, ID: ${movieId}]`);
+        console.log(`🔍 Will search Reddit for: "${searchTitleForReddit}"`);
         updateLoadingProgress(`Searching Reddit communities for recommendations...`);
         
-        document.querySelector('.section-title').textContent = `What you Got Next after "${movieTitle}" (${contentType})`;
+        document.querySelector('.section-title').textContent = `What you Got Next after "${movieTitle}"`;
         
         updateLoadingProgress(`Analyzing community recommendations...`);
 
@@ -130,7 +138,7 @@ async function getEnhancedRecommendations() {
         }, 15000); 
 
         const recommendResponse = await fetch(
-            `${API_BASE_URL}/ai-recommendations/${movieType}/${movieId}?comprehensive=true`
+            `${API_BASE_URL}/ai-recommendations/${movieType}/${movieId}?comprehensive=true&searchTitle=${encodeURIComponent(searchTitleForReddit)}`
         );
         
         if (!recommendResponse.ok) throw new Error(`Recommendations failed: ${recommendResponse.status}`);
@@ -223,7 +231,6 @@ function displayEnhancedMovies(movies) {
             </div>
         `;
         
-        // Click to open modal
         movieCard.addEventListener('click', () => openMovieModal(movie));
         
         movieCard.style.opacity = '0';
@@ -243,12 +250,10 @@ async function openMovieModal(movie) {
     const movieType = movie.title ? 'movie' : 'tv';
     const movieId = movie.id;
     
-    // Fetch detailed info
     try {
         const response = await fetch(`${API_BASE_URL}/details/${movieType}/${movieId}`);
         const details = await response.json();
         
-        // Set backdrop and poster
         const backdropPath = details.backdrop_path 
             ? `https://image.tmdb.org/t/p/original${details.backdrop_path}`
             : `https://image.tmdb.org/t/p/w500${details.poster_path}`;
@@ -260,8 +265,7 @@ async function openMovieModal(movie) {
         document.getElementById('modal-poster').src = posterPath;
         document.getElementById('modal-title').textContent = details.title || details.name;
         document.getElementById('modal-overview').textContent = details.overview || 'No overview available.';
-        
-        // Meta info
+
         const runtime = details.runtime ? `${details.runtime} min` : 'N/A';
         const releaseDate = details.release_date || details.first_air_date || 'N/A';
         const rating = details.vote_average ? details.vote_average.toFixed(1) : 'N/A';

@@ -315,28 +315,64 @@ class ImprovedRedditService {
     return common / (Math.max(eWords.size, tWords.size) || 1);
   }
 
-  calculatePostRelevance(postTitle, searchMovieTitle) {
+calculatePostRelevance(postTitle, searchMovieTitle, releaseYear = null) {
   const titleLower = postTitle.toLowerCase();
-  const queryLower = searchMovieTitle.toLowerCase();
+  
+  const movieTitleOnly = searchMovieTitle.replace(/\s*\(\d{4}\)\s*$/, '').trim();
+  const queryLower = movieTitleOnly.toLowerCase();
   
   let score = 0;
   
-  // Exact title match in quotes
-  if (titleLower.includes(`"${queryLower}"`)) score += 100;
+  if (titleLower.includes(`"${queryLower}"`) && 
+      (titleLower.includes('like') || titleLower.includes('similar') || titleLower.includes('recommend'))) {
+    score += 200;
+  }
   
-  // Title appears in post
-  if (titleLower.includes(queryLower)) score += 50;
+  if (releaseYear) {
+    const hasYear = titleLower.includes(releaseYear);
+    const hasTitle = titleLower.includes(queryLower);
+    const hasContext = titleLower.includes('like') || titleLower.includes('similar') || titleLower.includes('recommend');
+    
+    if (hasYear && hasTitle && hasContext) {
+      score += 150;
+    } else if (hasYear && hasTitle) {
+      score += 20;
+    }
+  }
   
-  // Has recommendation keywords
-  const goodKeywords = ['like', 'similar', 'recommend', 'suggestions', 'if you liked'];
-  goodKeywords.forEach(keyword => {
-    if (titleLower.includes(keyword)) score += 10;
-  });
+  if (titleLower.includes(queryLower)) {
+    if (titleLower.includes('if you liked ' + queryLower)) score += 100;
+    if (titleLower.includes('similar to ' + queryLower)) score += 90;
+    if (titleLower.includes('movies like ' + queryLower)) score += 85;
+    if (titleLower.includes(queryLower + ' recommendations')) score += 80;
+    
+    if (titleLower.includes('like')) score += 30;
+    if (titleLower.includes('recommend')) score += 25;
+    if (titleLower.includes('suggestions')) score += 20;
+  } else {
+    return -1000;
+  }
   
-  // Penalize bad keywords
-  const badKeywords = ['unlike', 'opposite', 'different from', 'not as good'];
+  const killPatterns = [
+    `best.*movies with`,
+    `movies with.*${queryLower}`,
+    `films with.*${queryLower}`,
+    `featuring.*${queryLower}`,
+    `${queryLower}.*scenes?`,
+    `${queryLower}.*moments?`,
+    `great.*${queryLower}.*movies`,
+    `${queryLower}.*in.*movies`,
+  ];
+  
+  for (const pattern of killPatterns) {
+    if (new RegExp(pattern, 'i').test(titleLower)) {
+      return -1000; 
+    }
+  }
+  
+  const badKeywords = ['unlike', 'opposite', 'different from', 'not as good', 'nothing like', 'not like'];
   badKeywords.forEach(keyword => {
-    if (titleLower.includes(keyword)) score -= 50;
+    if (titleLower.includes(keyword)) score -= 500;
   });
   
   return score;
@@ -349,24 +385,37 @@ async getQuickRecommendations(movieTitle, limit = 32, contentType = 'movie') {
         console.log(`🔍 Searching for ${contentType === 'tv' ? 'TV shows' : 'movies'} like: ${movieTitle}`);
         const recommendations = new Map();
         
-        // Get original movie's genres for filtering (optional but helps)
+        // Get original movie's genres and year for better filtering
         let originalGenres = null;
+        let releaseYear = null;
         try {
             const searchResults = await this.searchAndValidateTMDB(movieTitle, null, contentType);
             if (searchResults.length > 0) {
                 originalGenres = await this.getMovieGenres(searchResults[0].id, contentType);
-                console.log(`📋 Original genres: ${originalGenres.map(g => g.name).join(', ')}`);
+                const releaseDate = searchResults[0].release_date || searchResults[0].first_air_date;
+                releaseYear = releaseDate ? releaseDate.split('-')[0] : null;
+                console.log(`📋 Original: ${searchResults[0].title || searchResults[0].name} (${releaseYear})`);
+                console.log(`📋 Genres: ${originalGenres.map(g => g.name).join(', ')}`);
             }
         } catch (e) {
-            console.log('⚠️ Could not fetch original genres, skipping genre filter');
+            console.log('⚠️ Could not fetch original movie details');
         }
+        
+        const movieTitleClean = movieTitle.replace(/\s*\(\d{4}\)\s*$/, '').trim();
         
         let query;
         if (contentType === 'tv') {
-            query = `"${movieTitle}" tv show recommendations similar`;
+            query = releaseYear 
+                ? `(title:"like ${movieTitleClean}" OR title:"similar to ${movieTitleClean}" OR title:"${movieTitleClean} recommendations" OR title:"if you liked ${movieTitleClean}") ${releaseYear}`
+                : `(title:"like ${movieTitleClean}" OR title:"similar to ${movieTitleClean}" OR title:"${movieTitleClean} recommendations" OR title:"if you liked ${movieTitleClean}")`;
         } else {
-            query = `"${movieTitle}" movie recommendations similar`;
+            query = releaseYear 
+                ? `(title:"movies like ${movieTitleClean}" OR title:"similar to ${movieTitleClean}" OR title:"${movieTitleClean} recommendations" OR title:"if you liked ${movieTitleClean}") ${releaseYear}`
+                : `(title:"movies like ${movieTitleClean}" OR title:"similar to ${movieTitleClean}" OR title:"${movieTitleClean} recommendations" OR title:"if you liked ${movieTitleClean}")`;
         }
+
+        console.log(`🔍 Search query: "${query}"`);
+
         console.log(`🔍 Search query: "${query}"`);
         
         const subreddit = contentType === 'tv' ? 'televisionsuggestions' : 'MovieSuggestions';
@@ -384,7 +433,6 @@ async getQuickRecommendations(movieTitle, limit = 32, contentType = 'movie') {
                 });
         } catch (searchError) {
             console.error(`❌ Failed to search r/${subreddit}:`, searchError.message);
-            // Try alternative subreddit
             if (contentType === 'tv') {
                 console.log(`🔄 Trying alternative: r/television`);
                 try {
@@ -411,45 +459,91 @@ async getQuickRecommendations(movieTitle, limit = 32, contentType = 'movie') {
         const batchSize = 3;
         let shouldStop = false;
         
-        for (let i = 0; i < Math.min(resultsArray.length, 8); i += batchSize) {
-            if (shouldStop || recommendations.size >= limit) {
-                console.log(`✅ Reached ${recommendations.size} recommendations - stopping search`);
-                break;
-            }
-            
-            const batch = resultsArray.slice(i, i + batchSize);
-            
-            // Sort batch by relevance
-            const scoredBatch = batch.map(post => ({
-                post,
-                relevance: this.calculatePostRelevance(post?.title || '', movieTitle)
-            })).filter(item => item.relevance > 0)
-                .sort((a, b) => b.relevance - a.relevance);
+for (let i = 0; i < Math.min(resultsArray.length, 8); i += batchSize) {
+    if (shouldStop || recommendations.size >= limit) {
+        console.log(`✅ Reached ${recommendations.size} recommendations - stopping search`);
+        break;
+    }
+    
+    const batch = resultsArray.slice(i, i + batchSize);
+    
+    // Sort batch by relevance score
+    const scoredBatch = batch.map(post => ({
+        post,
+        relevance: this.calculatePostRelevance(post?.title || '', movieTitle, releaseYear)
+    })).filter(item => item.relevance > 0)
+        .sort((a, b) => b.relevance - a.relevance);
 
-            await Promise.all(scoredBatch.map(async ({ post, relevance }) => {
-                if (recommendations.size >= limit) {
-                    return;
-                }
-                
-                const titleText = post?.title || '';
-                console.log(`\n✅ "${titleText}" (relevance: ${relevance})`);
-                const titleLower = titleText.toLowerCase();
-                const queryLower = movieTitle.toLowerCase();
+    await Promise.all(scoredBatch.map(async ({ post, relevance }) => {
+        if (recommendations.size >= limit) {
+            return;
+        }
+        
+        const titleText = post?.title || '';
+        console.log(`\n🔍 Checking post: "${titleText}" (relevance: ${relevance})`);
+      
+const titleLower = titleText.toLowerCase();
+const movieTitleOnly = searchMovieTitle.replace(/\s*\(\d{4}\)\s*$/, '').trim();
+const queryLower = movieTitleOnly.toLowerCase();
 
-                // More strict title matching
-                if (!titleLower.includes(queryLower)) {
-                    console.log(`  ⏭️ Skipping post: "${titleText}" (doesn't match query)`);
-                    return;
-                }
+console.log(`\n   🎯 Checking post: "${titleText}"`);
+console.log(`   🔍 Looking for: "${movieTitleOnly}"`);
 
-                // Skip posts that are clearly about different movies
-                const skipKeywords = ['unlike', 'not like', 'opposite of', 'different from'];
-                if (skipKeywords.some(keyword => titleLower.includes(keyword))) {
-                    console.log(`  ⏭️ Skipping negative comparison post`);
-                    return;
-                }
-                
-                console.log(`\n✅ "${titleText}"`);
+// CRITICAL: Post MUST be asking for recommendations FOR this specific movie
+// NOT just mentioning it as an example
+
+// Pattern 1: "movies like [OUR MOVIE]" or "films like [OUR MOVIE]"
+const patternMoviesLike = new RegExp(`(movies?|films?|shows?)\\s+like\\s+["']?${queryLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?`, 'i');
+
+// Pattern 2: "similar to [OUR MOVIE]"
+const patternSimilarTo = new RegExp(`similar\\s+to\\s+["']?${queryLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?`, 'i');
+
+// Pattern 3: "[OUR MOVIE] recommendations"
+const patternRecommendations = new RegExp(`["']?${queryLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?\\s+(recommendation|suggest)`, 'i');
+
+// Pattern 4: "if you liked [OUR MOVIE]"
+const patternIfYouLiked = new RegExp(`if\\s+you\\s+(liked?|loved?)\\s+["']?${queryLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?`, 'i');
+
+// Pattern 5: "[OUR MOVIE]" in title with recommendation context nearby
+const hasMovieInQuotes = titleText.includes(`"${movieTitleOnly}"`) || titleText.includes(`'${movieTitleOnly}'`);
+const hasRecContext = /like|similar|recommend|suggest|if you/i.test(titleText);
+
+const isValidPost = 
+    patternMoviesLike.test(titleText) ||
+    patternSimilarTo.test(titleText) ||
+    patternRecommendations.test(titleText) ||
+    patternIfYouLiked.test(titleText) ||
+    (hasMovieInQuotes && hasRecContext);
+
+if (!isValidPost) {
+    console.log(`   🚫 REJECTED: Not asking for "${movieTitleOnly}" recommendations`);
+    console.log(`   ❌ Post appears to be asking about something else`);
+    return;
+}
+
+// ANTI-PATTERN: Reject if movie is mentioned as one of MANY examples
+// Example: "movies with fight scenes, like John Wick, Extraction, Equalizer"
+const moviePosition = titleText.toLowerCase().indexOf(queryLower);
+if (moviePosition !== -1) {
+    const textAfterMovie = titleText.substring(moviePosition + queryLower.length, moviePosition + queryLower.length + 50);
+    const hasOtherMoviesAfter = /,\s*[A-Z][a-z]+|and\s+[A-Z][a-z]+|\s+or\s+[A-Z][a-z]+/.test(textAfterMovie);
+    
+    if (hasOtherMoviesAfter && !patternMoviesLike.test(titleText.substring(0, moviePosition + queryLower.length))) {
+        console.log(`   🚫 REJECTED: "${movieTitleOnly}" is just one of many examples`);
+        console.log(`   ❌ Post is asking for a different type of movie`);
+        return;
+    }
+}
+
+// ANTI-PATTERN: Reject posts asking about fight scenes, special effects, etc.
+const askingForAttribute = /(movies?|films?)\s+(with|that have|featuring)\s+(good|great|amazing|intense)/i.test(titleText);
+if (askingForAttribute && !patternMoviesLike.test(titleText)) {
+    console.log(`   🚫 REJECTED: Post is asking for movies with specific attributes`);
+    console.log(`   ❌ Not asking for movies similar to "${movieTitleOnly}"`);
+    return;
+}
+
+console.log(`   ✅ VALID: Post is asking for "${movieTitleOnly}" recommendations`);
                 
                 if (post.num_comments > 0) {
                     try {
@@ -492,10 +586,16 @@ async getQuickRecommendations(movieTitle, limit = 32, contentType = 'movie') {
                             );
                             
                             for (let idx = 0; idx < batchResults.length; idx++) {
-                                if (shouldStop) break; // Check at start of loop
+                                if (shouldStop) break;
                                 
                                 const commentMovies = batchResults[idx];
                                 const comment = commentBatch[idx];
+
+                                    if (!commentMovies || commentMovies.length === 0) {
+                                      continue;
+                                  }
+
+                                  console.log(`   📝 Comment found ${commentMovies.length} potential recommendation(s)`);
                                 
                                 for (const movie of commentMovies) {
                                     if (recommendations.size >= limit) {
@@ -527,10 +627,10 @@ async getQuickRecommendations(movieTitle, limit = 32, contentType = 'movie') {
                                     });
                                 }
                                 
-                                if (shouldStop) break; // Break out of batchResults loop
+                                if (shouldStop) break;
                             }
                             
-                            if (shouldStop) break; // Break out of topComments for loop
+                            if (shouldStop) break;
                         }
                     } catch (commentError) {
                         console.log('   ⚠️ Could not fetch comments:', commentError.message);
@@ -538,7 +638,6 @@ async getQuickRecommendations(movieTitle, limit = 32, contentType = 'movie') {
                 }
             }));
 
-            // Check after Promise.all completes
             if (shouldStop || recommendations.size >= limit) {
                 console.log(`   ⏸️ Stopping - found ${recommendations.size} recommendations`);
                 break;

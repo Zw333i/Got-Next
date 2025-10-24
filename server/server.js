@@ -89,11 +89,10 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-
 app.get('/api/ai-recommendations/:type/:id', validateParams, async (req, res) => {
   try {
     const { type, id } = req.params;
-    const { comprehensive = 'false' } = req.query;
+    const { comprehensive = 'false', searchTitle } = req.query; // ADD searchTitle parameter
 
     let title = '', overview = '', releaseYear = '';
     const details = await tmdbRequest(`/${type}/${id}`);
@@ -109,20 +108,16 @@ app.get('/api/ai-recommendations/:type/:id', validateParams, async (req, res) =>
     let searchStats = { processingTime: 0, totalFound: 0, uniqueMovies: 0, sourcesUsed: [] };
 
     if (redditService && redditService.isAvailable()) {
-    try {
+      try {
         const startTime = Date.now();
-        console.log(`🔍 Reddit search for ${type}: "${title}"`);
         
-        // For TV shows, add "tv show" or "series" to search
-        let searchTitle = title;
-        if (type === 'tv') {
-            searchTitle = `${title}`;
-            console.log(`📺 TV Show search query: "${searchTitle}"`);
-        }
-        
+        const searchQueryClean = (searchTitle || title).replace(/\s*\(\d{4}\)\s*$/, '').trim();
+
+        console.log(`🔍 Reddit search for ${type}: "${searchQueryClean}"`);
+
         redditRecommendations = (comprehensive === 'true')
-          ? await redditService.getRecommendations(searchTitle, 32, type)
-          : await redditService.getQuickRecommendations(searchTitle, 32, type);
+            ? await redditService.getRecommendations(searchQueryClean, 32, type)
+            : await redditService.getQuickRecommendations(searchQueryClean, 32, type);
 
         searchStats.processingTime = Date.now() - startTime;
         searchStats.totalFound = redditRecommendations.length;
@@ -186,7 +181,8 @@ app.get('/api/ai-recommendations/:type/:id', validateParams, async (req, res) =>
         tmdb_recommendations: tmdbRecommendations.length,
         has_reddit_data: redditRecommendations.length > 0,
         comprehensive_search: comprehensive === 'true',
-        reddit_available: redditService ? redditService.isAvailable() : false
+        reddit_available: redditService ? redditService.isAvailable() : false,
+        search_query_used: searchTitle || title 
       }
     });
   } catch (error) {
