@@ -115,9 +115,7 @@ app.get('/api/ai-recommendations/:type/:id', validateParams, async (req, res) =>
 
         console.log(`🔍 Reddit search for ${type}: "${searchQueryClean}"`);
 
-        redditRecommendations = (comprehensive === 'true')
-            ? await redditService.getRecommendations(searchQueryClean, 32, type)
-            : await redditService.getQuickRecommendations(searchQueryClean, 32, type);
+        redditRecommendations = await redditService.getQuickRecommendations(searchQueryClean, 32, type);
 
         searchStats.processingTime = Date.now() - startTime;
         searchStats.totalFound = redditRecommendations.length;

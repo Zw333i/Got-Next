@@ -1,4 +1,4 @@
-// server/redditServiceV2.js - Optimized for maximum movie extraction
+// server/redditServiceV2.js 
 const snoowrap = require('snoowrap');
 const axios = require('axios');
 const AIParser = require('./aiParser');
@@ -157,24 +157,24 @@ class ImprovedRedditService {
 
   console.log('  📝 Using regex extraction (AI unavailable or failed)');
   const potentialTitles = new Set();
-    const lines = text.split('\n');
-    
-    const titlesWithYears = new Map(); 
-    
-    lines.forEach(line => {
-        const trimmed = line.trim();
-        
-        const lineWithYear = /^([A-Z][A-Za-z0-9\s&:'.!?-]{2,49})\s*\((\d{4})\)$/.exec(trimmed);
-        if (lineWithYear) {
-            const title = lineWithYear[1].trim();
-            const year = lineWithYear[2];
-            potentialTitles.add(title);
-            titlesWithYears.set(title, year); 
-        } else if (/^[A-Z][A-Za-z0-9\s&:'.!?-]{2,49}$/.test(trimmed)) {
- 
-            potentialTitles.add(trimmed);
-        }
-    });
+  const titlesWithYears = new Map();
+
+  // Extract from lines
+  const lines = text.split(/[\n\r]+/);
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.length < 3) return;
+
+    const lineWithYear = /^([A-Z][A-Za-z0-9\s&:'.!?-]{2,49})\s*\((\d{4})\)$/.exec(trimmed);
+    if (lineWithYear) {
+      const title = lineWithYear[1].trim();
+      const year = lineWithYear[2];
+      potentialTitles.add(title);
+      titlesWithYears.set(title, year);
+    } else if (/^[A-Z][A-Za-z0-9\s&:'.!?-]{2,49}$/.test(trimmed)) {
+      potentialTitles.add(trimmed);
+    }
+  });
     
     const bulletPattern = /^[\s]*[-*•]\s*([A-Z][A-Za-z0-9\s&:'.!?-]{2,49})/gm;
     let match;
@@ -322,7 +322,8 @@ calculatePostRelevance(postTitle, searchMovieTitle, releaseYear = null) {
   const queryLower = movieTitleOnly.toLowerCase();
   
   let score = 0;
-  
+
+   
   if (titleLower.includes(`"${queryLower}"`) && 
       (titleLower.includes('like') || titleLower.includes('similar') || titleLower.includes('recommend'))) {
     score += 200;
@@ -352,7 +353,7 @@ calculatePostRelevance(postTitle, searchMovieTitle, releaseYear = null) {
   } else {
     return -1000;
   }
-  
+
   const killPatterns = [
     `best.*movies with`,
     `movies with.*${queryLower}`,
@@ -385,7 +386,6 @@ async getQuickRecommendations(movieTitle, limit = 32, contentType = 'movie') {
         console.log(`🔍 Searching for ${contentType === 'tv' ? 'TV shows' : 'movies'} like: ${movieTitle}`);
         const recommendations = new Map();
         
-        // Get original movie's genres and year for better filtering
         let originalGenres = null;
         let releaseYear = null;
         try {
@@ -405,69 +405,110 @@ async getQuickRecommendations(movieTitle, limit = 32, contentType = 'movie') {
         
         let query;
         if (contentType === 'tv') {
-            query = releaseYear 
-                ? `(title:"like ${movieTitleClean}" OR title:"similar to ${movieTitleClean}" OR title:"${movieTitleClean} recommendations" OR title:"if you liked ${movieTitleClean}") ${releaseYear}`
-                : `(title:"like ${movieTitleClean}" OR title:"similar to ${movieTitleClean}" OR title:"${movieTitleClean} recommendations" OR title:"if you liked ${movieTitleClean}")`;
+            const baseTerms = [
+                `"shows like ${movieTitleClean}"`,
+                `"tv like ${movieTitleClean}"`,
+                `"similar to ${movieTitleClean}"`,
+                `"${movieTitleClean} recommendations"`,
+                `"if you liked ${movieTitleClean}"`,
+                `"just watched ${movieTitleClean}"`,
+                `"besides ${movieTitleClean}"`
+            ];
+            
+            if (releaseYear) {
+                baseTerms.push(
+                    `"${movieTitleClean} (${releaseYear})"`,
+                    `"just watched ${movieTitleClean} (${releaseYear})"`,
+                    `"besides ${movieTitleClean} (${releaseYear})"`
+                );
+            }
+            
+            query = `(title:${baseTerms.join(' OR title:')})`;
         } else {
-            query = releaseYear 
-                ? `(title:"movies like ${movieTitleClean}" OR title:"similar to ${movieTitleClean}" OR title:"${movieTitleClean} recommendations" OR title:"if you liked ${movieTitleClean}") ${releaseYear}`
-                : `(title:"movies like ${movieTitleClean}" OR title:"similar to ${movieTitleClean}" OR title:"${movieTitleClean} recommendations" OR title:"if you liked ${movieTitleClean}")`;
+            const baseTerms = [
+                `"movies like ${movieTitleClean}"`,
+                `"films like ${movieTitleClean}"`,
+                `"similar to ${movieTitleClean}"`,
+                `"${movieTitleClean} recommendations"`,
+                `"if you liked ${movieTitleClean}"`,
+                `"like ${movieTitleClean}"`,
+                `"just watched ${movieTitleClean}"`,
+                `"besides ${movieTitleClean}"`,
+                `"any.*like ${movieTitleClean}"`  
+            ];
+            
+            if (releaseYear) {
+                baseTerms.push(
+                    `"${movieTitleClean} (${releaseYear})"`,
+                    `"just watched ${movieTitleClean} (${releaseYear})"`,
+                    `"besides ${movieTitleClean} (${releaseYear})"`
+                );
+            }
+            
+            query = `(title:${baseTerms.join(' OR title:')})`;
         }
 
         console.log(`🔍 Search query: "${query}"`);
-
-        console.log(`🔍 Search query: "${query}"`);
         
-        const subreddit = contentType === 'tv' ? 'televisionsuggestions' : 'MovieSuggestions';
-        console.log(`📺 Searching r/${subreddit} for ${contentType}`);
+        const subreddits = contentType === 'tv' 
+            ? ['televisionsuggestions', 'television', 'NetflixBestOf', 'DisneyPlus', 'HBOMax']
+            : ['MovieSuggestions', 'movies', 'NetflixBestOf', 'DisneyPlus', 'HBOMax', 'amazonprime'];
         
-        let results;
-        try {
-            results = await this.reddit
-                .getSubreddit(subreddit)
-                .search({
-                    query: query,
-                    sort: 'relevance',
-                    time: 'all',
-                    limit: 20
-                });
-        } catch (searchError) {
-            console.error(`❌ Failed to search r/${subreddit}:`, searchError.message);
-            if (contentType === 'tv') {
-                console.log(`🔄 Trying alternative: r/television`);
-                try {
-                    results = await this.reddit
-                        .getSubreddit('television')
-                        .search({
-                            query: query,
-                            sort: 'relevance',
-                            time: 'all',
-                            limit: 20
-                        });
-                } catch (altError) {
-                    console.error(`❌ Alternative search also failed:`, altError.message);
-                    return [];
-                }
-            } else {
-                return [];
+        console.log(`📺 Searching across ${subreddits.length} subreddits: ${subreddits.join(', ')}`);
+        
+        let allResults = [];
+        
+        for (const subreddit of subreddits) {
+            try {
+                console.log(`  🔍 Searching r/${subreddit}...`);
+                const results = await this.reddit
+                    .getSubreddit(subreddit)
+                    .search({
+                        query: query,
+                        sort: 'relevance',
+                        time: 'all',
+                        limit: 20  
+                    });
+                
+                const resultsArray = Array.isArray(results) ? results : Array.from(results || []);
+                console.log(`  ✅ Found ${resultsArray.length} posts in r/${subreddit}`);
+                allResults = allResults.concat(resultsArray);
+                
+                await this.sleep(500); 
+                
+            } catch (searchError) {
+                console.log(`  ⚠️ Error searching r/${subreddit}: ${searchError.message}`);
+                continue; 
             }
         }
         
-        const resultsArray = Array.isArray(results) ? results : Array.from(results || []);
+        if (allResults.length === 0) {
+            console.log(`❌ No posts found across all subreddits`);
+            return [];
+        }
+        
+        const resultsArray = allResults;
         console.log(`📊 Found ${resultsArray.length} posts`);
         
+        const minRecommendations = 8;
         const batchSize = 3;
         let shouldStop = false;
+        let postsProcessed = 0;
+        const maxPostsToProcess = 25;  
         
-for (let i = 0; i < Math.min(resultsArray.length, 8); i += batchSize) {
-    if (shouldStop || recommendations.size >= limit) {
-        console.log(`✅ Reached ${recommendations.size} recommendations - stopping search`);
+for (let i = 0; i < Math.min(resultsArray.length, maxPostsToProcess); i += batchSize) {
+  if (recommendations.size >= limit) {
+        console.log(`✅ Reached maximum ${recommendations.size} recommendations - stopping search`);
+        break;
+    }
+    
+    if (shouldStop && recommendations.size >= minRecommendations) {
+        console.log(`✅ Reached ${recommendations.size} recommendations (minimum met) - stopping search`);
         break;
     }
     
     const batch = resultsArray.slice(i, i + batchSize);
     
-    // Sort batch by relevance score
     const scoredBatch = batch.map(post => ({
         post,
         relevance: this.calculatePostRelevance(post?.title || '', movieTitle, releaseYear)
@@ -483,67 +524,61 @@ for (let i = 0; i < Math.min(resultsArray.length, 8); i += batchSize) {
         console.log(`\n🔍 Checking post: "${titleText}" (relevance: ${relevance})`);
       
 const titleLower = titleText.toLowerCase();
-const movieTitleOnly = searchMovieTitle.replace(/\s*\(\d{4}\)\s*$/, '').trim();
+const movieTitleOnly = movieTitleClean;
 const queryLower = movieTitleOnly.toLowerCase();
 
 console.log(`\n   🎯 Checking post: "${titleText}"`);
 console.log(`   🔍 Looking for: "${movieTitleOnly}"`);
 
-// CRITICAL: Post MUST be asking for recommendations FOR this specific movie
-// NOT just mentioning it as an example
+const escapedQuery = queryLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// Pattern 1: "movies like [OUR MOVIE]" or "films like [OUR MOVIE]"
-const patternMoviesLike = new RegExp(`(movies?|films?|shows?)\\s+like\\s+["']?${queryLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?`, 'i');
+const movieMentionedPlain = titleLower.includes(queryLower);
+const movieMentionedWithYear = releaseYear && new RegExp(`${escapedQuery}[\\s]*\\(?${releaseYear}\\)?`, 'i').test(titleText);
+const movieMentioned = movieMentionedPlain || movieMentionedWithYear;
 
-// Pattern 2: "similar to [OUR MOVIE]"
-const patternSimilarTo = new RegExp(`similar\\s+to\\s+["']?${queryLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?`, 'i');
+if (!movieMentioned) {
+    console.log(`   🚫 REJECTED: "${movieTitleOnly}" not mentioned in post`);
+    return;
+}
 
-// Pattern 3: "[OUR MOVIE] recommendations"
-const patternRecommendations = new RegExp(`["']?${queryLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?\\s+(recommendation|suggest)`, 'i');
+// PATTERN MATCHING 
+const patternMoviesLike = new RegExp(`(movies?|films?|shows?)\\s+like\\s+["']?${escapedQuery}`, 'i');
 
-// Pattern 4: "if you liked [OUR MOVIE]"
-const patternIfYouLiked = new RegExp(`if\\s+you\\s+(liked?|loved?)\\s+["']?${queryLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?`, 'i');
+const patternSimilarTo = new RegExp(`similar\\s+to\\s+["']?${escapedQuery}`, 'i');
 
-// Pattern 5: "[OUR MOVIE]" in title with recommendation context nearby
-const hasMovieInQuotes = titleText.includes(`"${movieTitleOnly}"`) || titleText.includes(`'${movieTitleOnly}'`);
-const hasRecContext = /like|similar|recommend|suggest|if you/i.test(titleText);
+const patternRecommendations = new RegExp(`${escapedQuery}.*?(recommendation|suggest|similar)`, 'i');
+
+const patternIfYouLiked = new RegExp(`if\\s+you\\s+(liked?|loved?|enjoyed)\\s+["']?${escapedQuery}`, 'i');
+
+const patternJustWatched = new RegExp(`(just|recently)\\s+(watched|saw|finished)\\s+["']?${escapedQuery}`, 'i');
+const hasRecKeywords = /(want more|need more|recommend|similar|like|suggest|what.*(next|else|now|other)|any.*(suggestion|recommendation)|looking for)/i.test(titleText);
+
+const patternBesides = new RegExp(`(besides|other than|apart from|aside from|except)\\s+["']?${escapedQuery}`, 'i');
+
+const hasMovieWithYear = releaseYear && new RegExp(`${escapedQuery}[\\s]*\\(${releaseYear}\\)`, 'i').test(titleText);
 
 const isValidPost = 
     patternMoviesLike.test(titleText) ||
     patternSimilarTo.test(titleText) ||
     patternRecommendations.test(titleText) ||
     patternIfYouLiked.test(titleText) ||
-    (hasMovieInQuotes && hasRecContext);
+    (patternJustWatched.test(titleText) && hasRecKeywords) ||
+    patternBesides.test(titleText) ||
+    (hasMovieWithYear && hasRecKeywords);
 
 if (!isValidPost) {
     console.log(`   🚫 REJECTED: Not asking for "${movieTitleOnly}" recommendations`);
-    console.log(`   ❌ Post appears to be asking about something else`);
+    console.log(`   ❌ Post doesn't match recommendation patterns`);
     return;
 }
 
-// ANTI-PATTERN: Reject if movie is mentioned as one of MANY examples
-// Example: "movies with fight scenes, like John Wick, Extraction, Equalizer"
-const moviePosition = titleText.toLowerCase().indexOf(queryLower);
-if (moviePosition !== -1) {
-    const textAfterMovie = titleText.substring(moviePosition + queryLower.length, moviePosition + queryLower.length + 50);
-    const hasOtherMoviesAfter = /,\s*[A-Z][a-z]+|and\s+[A-Z][a-z]+|\s+or\s+[A-Z][a-z]+/.test(textAfterMovie);
-    
-    if (hasOtherMoviesAfter && !patternMoviesLike.test(titleText.substring(0, moviePosition + queryLower.length))) {
-        console.log(`   🚫 REJECTED: "${movieTitleOnly}" is just one of many examples`);
-        console.log(`   ❌ Post is asking for a different type of movie`);
-        return;
-    }
-}
-
-// ANTI-PATTERN: Reject posts asking about fight scenes, special effects, etc.
-const askingForAttribute = /(movies?|films?)\s+(with|that have|featuring)\s+(good|great|amazing|intense)/i.test(titleText);
-if (askingForAttribute && !patternMoviesLike.test(titleText)) {
-    console.log(`   🚫 REJECTED: Post is asking for movies with specific attributes`);
-    console.log(`   ❌ Not asking for movies similar to "${movieTitleOnly}"`);
+const askingForSpecificAttribute = /(movies?|films?)\s+(with|that have|featuring)\s+(good|great|amazing|intense)\s+(fight|action|scene|effect|music)/i.test(titleText);
+if (askingForSpecificAttribute && !patternMoviesLike.test(titleText) && !patternSimilarTo.test(titleText)) {
+    console.log(`   🚫 REJECTED: Post is asking for movies with specific attributes (not about "${movieTitleOnly}")`);
     return;
 }
 
-console.log(`   ✅ VALID: Post is asking for "${movieTitleOnly}" recommendations`);
+console.log(`   ✅ VALID: Post is asking for recommendations related to "${movieTitleOnly}"`);
                 
                 if (post.num_comments > 0) {
                     try {
@@ -565,8 +600,79 @@ console.log(`   ✅ VALID: Post is asking for "${movieTitleOnly}" recommendation
                         
                         console.log(`   Processing ${topComments.length} top comments...`);
                         
-                        const commentBatchSize = 5;
-                        for (let j = 0; j < topComments.length; j += commentBatchSize) {
+                        let usedAIBatch = false;
+                        
+                        if (this.aiParser && this.aiParser.isAvailable() && topComments.length > 0) {
+                            console.log(`   🤖 Using AI batch extraction for ${topComments.length} comments`);
+                            
+                            const commentTexts = topComments.map(c => c.body);
+                            const aiTitles = await this.aiParser.extractTitlesFromMultipleComments(
+                                commentTexts,
+                                movieTitle,
+                                contentType
+                            );
+                            
+                            if (aiTitles && aiTitles.length > 0) {
+                                console.log(`   ✅ AI batch found ${aiTitles.length} titles - validating with TMDB...`);
+                                usedAIBatch = true;
+                                
+                                for (const titleStr of aiTitles) {
+                                    if (recommendations.size >= limit) {
+                                        console.log(`   🛑 Reached ${limit} recommendations - stopping`);
+                                        shouldStop = true;
+                                        break;
+                                    }
+                                    
+                                    const yearMatch = /\((\d{4})\)/.exec(titleStr);
+                                    const title = titleStr.replace(/\s*\(\d{4}\)\s*/, '').trim();
+                                    const year = yearMatch ? yearMatch[1] : null;
+                                    
+                                    try {
+                                        const tmdbResults = await this.searchAndValidateTMDB(title, year, contentType);
+                                        if (tmdbResults.length > 0) {
+                                            const matchedMovie = tmdbResults[0];
+                                            
+                                            // Genre filtering
+                                            if (originalGenres && originalGenres.length > 0) {
+                                                try {
+                                                    const movieGenres = await this.getMovieGenres(matchedMovie.id, contentType);
+                                                    if (!this.isGenreSimilar(originalGenres, movieGenres)) {
+                                                        console.log(`  ⏭️ Skipping "${matchedMovie.title || matchedMovie.name}" - genre mismatch`);
+                                                        continue;
+                                                    }
+                                                } catch (e) {
+                                                    console.log(`  ⚠️ Genre check failed`);
+                                                }
+                                            }
+                                            
+                                            this.addOrUpdateRecommendation(recommendations, {
+                                                extractedTitle: title,
+                                                tmdbMatch: matchedMovie,
+                                                confidence: this.calculateMatchConfidence(title, matchedMovie.title || matchedMovie.name)
+                                            }, {
+                                                source: 'ai-batch',
+                                                subreddit: post?.subreddit?.display_name || 'unknown',
+                                                score: 10, // High score for AI-extracted
+                                                url: post?.permalink ? `https://reddit.com${post.permalink}` : '#',
+                                            });
+                                            
+                                            console.log(`  ✅ Added: "${matchedMovie.title || matchedMovie.name}"`);
+                                        }
+                                    } catch (error) {
+                                        console.log(`  ⚠️ Error validating "${title}"`);
+                                    }
+                                    
+                                    await this.sleep(100);
+                                }
+                            } else {
+                                console.log(`   ℹ️ AI batch found nothing - falling back to regex`);
+                            }
+                        }
+                        
+                        if (!usedAIBatch && !shouldStop && recommendations.size < limit) {
+                            console.log(`   📝 Using regex extraction for comments`);
+                            const commentBatchSize = 5;
+                            for (let j = 0; j < topComments.length; j += commentBatchSize) {
                             if (recommendations.size >= limit) {
                                 console.log(`   ⏸️ Stopping comment processing - found enough results (${recommendations.size}/${limit})`);
                                 shouldStop = true;
@@ -621,7 +727,7 @@ console.log(`   ✅ VALID: Post is asking for "${movieTitleOnly}" recommendation
                                     
                                     this.addOrUpdateRecommendation(recommendations, movie, {
                                         source: 'comment',
-                                        subreddit: subreddit,
+                                        subreddit: post?.subreddit?.display_name || 'unknown',
                                         score: comment.score || 1,
                                         url: post?.permalink ? `https://reddit.com${post.permalink}` : '#',
                                     });
@@ -632,19 +738,23 @@ console.log(`   ✅ VALID: Post is asking for "${movieTitleOnly}" recommendation
                             
                             if (shouldStop) break;
                         }
+                        }  // Close the if (!usedAIBatch) block
                     } catch (commentError) {
                         console.log('   ⚠️ Could not fetch comments:', commentError.message);
                     }
                 }
             }));
 
-            if (shouldStop || recommendations.size >= limit) {
-                console.log(`   ⏸️ Stopping - found ${recommendations.size} recommendations`);
+            postsProcessed++;
+            
+            // Stop conditions
+            if (recommendations.size >= limit) {
+                console.log(`   ✅ Maximum ${recommendations.size} recommendations reached - stopping`);
                 break;
             }
             
-            if (recommendations.size >= limit) {
-                console.log(`✅ Found ${recommendations.size} recommendations - stopping early`);
+            if (shouldStop && recommendations.size >= minRecommendations) {
+                console.log(`   ✅ Found ${recommendations.size} recommendations (minimum met) - stopping`);
                 break;
             }
             
@@ -655,7 +765,13 @@ console.log(`   ✅ VALID: Post is asking for "${movieTitleOnly}" recommendation
             .sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0))
             .slice(0, limit);
             
-        console.log(`\n✅ Final: ${finalResults.length} unique recommendations`);
+        console.log(`\n✅ Final: ${finalResults.length} unique recommendations (min: ${minRecommendations}, max: ${limit})`);
+        
+        // Warn if we didn't reach minimum
+        if (finalResults.length < minRecommendations) {
+            console.log(`⚠️ Warning: Only found ${finalResults.length} recommendations (below minimum of ${minRecommendations})`);
+        }
+        
         return finalResults;
         
     } catch (err) {
@@ -663,6 +779,7 @@ console.log(`   ✅ VALID: Post is asking for "${movieTitleOnly}" recommendation
         return [];
     }
 }
+
 
   async getRecommendations(movieTitle, limit = 32, contentType = 'movie') {
     if (!this.isAvailable()) return [];
@@ -672,8 +789,8 @@ console.log(`   ✅ VALID: Post is asking for "${movieTitleOnly}" recommendation
         const recommendations = new Map();
 
         const subreddits = contentType === 'tv' 
-        ? ['televisionsuggestions', 'ifyoulikeblank', 'tv_shows']
-        : ['MovieSuggestions', 'ifyoulikeblank', 'movies'];
+        ? ['televisionsuggestions', 'ifyoulikeblank', 'tv_shows','DisneyPlus','NetflixBestOf','AmazonPrimeVideo','HBOMax','HBO']
+        : ['MovieSuggestions', 'ifyoulikeblank', 'movies','DisneyPlus','NetflixBestOf','AmazonPrimeVideo','HBOMax','HBO'];
         
         for (const subreddit of subreddits) {
             const searchTerm = contentType === 'tv' ? 'tv shows' : 'movies';
@@ -691,7 +808,6 @@ console.log(`   ✅ VALID: Post is asking for "${movieTitleOnly}" recommendation
                 const resultsArray = Array.isArray(results) ? results : Array.from(results || []);
 
             for (const post of resultsArray) {
-                // Stop if we have enough recommendations
                 if (recommendations.size >= limit) {
                     console.log(`✅ Reached ${recommendations.size} recommendations in r/${subreddit} - moving to next subreddit`);
                     break;
@@ -744,7 +860,6 @@ console.log(`   ✅ VALID: Post is asking for "${movieTitleOnly}" recommendation
           return finalResults;
     });
   }
-
   async getMovieGenres(movieId, contentType = 'movie') {
   try {
     const endpoint = contentType === 'tv' ? `/tv/${movieId}` : `/movie/${movieId}`;
